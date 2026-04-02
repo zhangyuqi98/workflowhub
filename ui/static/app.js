@@ -5,6 +5,8 @@ const state = {
   originalId: null,
   template: null,
   meta: null,
+  previewTimer: null,
+  previewDirty: true,
 };
 
 const els = {
@@ -39,7 +41,7 @@ async function initialize() {
 function bindEvents() {
   els.searchInput.addEventListener("input", applySearch);
   els.form.addEventListener("submit", onSave);
-  els.form.addEventListener("input", refreshPreview);
+  els.form.addEventListener("input", schedulePreviewRefresh);
   els.newButton.addEventListener("click", createFromTemplate);
   els.refreshButton.addEventListener("click", async () => {
     await loadMeta();
@@ -63,7 +65,8 @@ function bindEvents() {
     }
     if (target.matches("[data-remove-row]")) {
       target.closest(".row")?.remove();
-      refreshPreview();
+      refreshStepLabels();
+      refreshPreviewNow();
     }
   });
 }
@@ -167,7 +170,8 @@ function populateForm(workflow, originalId) {
   setInput("summary", workflow.summary || "");
   setInput("match_keywords", listToComma(workflow.match?.keywords));
   fillRows("steps", mergeStepsWithTools(workflow.steps || [], workflow.tool_preferences || []), renderStepRow);
-  refreshPreview();
+  autosizeStepTextareas();
+  refreshPreviewNow();
 }
 
 function updateDeleteButton() {
@@ -201,8 +205,9 @@ function addRow(type) {
   document.getElementById(type).appendChild(factory());
   if (type === "steps") {
     refreshStepLabels();
+    autosizeStepTextareas();
   }
-  refreshPreview();
+  refreshPreviewNow();
 }
 
 function renderToolPreferenceRow(item) {
@@ -236,7 +241,10 @@ function configureRow(row, fieldConfigs) {
     el.dataset.name = name;
     el.value = value;
     el.placeholder = placeholder;
-    el.addEventListener("input", refreshPreview);
+    if (el instanceof HTMLTextAreaElement) {
+      autosizeTextarea(el);
+      el.addEventListener("input", () => autosizeTextarea(el));
+    }
   });
 }
 
@@ -352,13 +360,27 @@ async function deleteCurrentWorkflow() {
   }
 }
 
-function refreshPreview() {
+function schedulePreviewRefresh() {
+  state.previewDirty = true;
+  if (state.previewTimer) {
+    window.clearTimeout(state.previewTimer);
+  }
+  state.previewTimer = window.setTimeout(() => {
+    state.previewTimer = null;
+    if (isJsonTabActive()) {
+      refreshPreviewNow();
+    }
+  }, 120);
+}
+
+function refreshPreviewNow() {
   try {
-    refreshStepLabels();
     const workflow = buildWorkflowFromForm();
     els.jsonPreview.textContent = JSON.stringify(workflow, null, 2);
+    state.previewDirty = false;
   } catch (_error) {
     els.jsonPreview.textContent = "{}";
+    state.previewDirty = false;
   }
 }
 
@@ -369,6 +391,9 @@ function activateTab(tabName) {
   document.querySelectorAll("[data-panel]").forEach((panel) => {
     panel.classList.toggle("is-active", panel.dataset.panel === tabName);
   });
+  if (tabName === "json" && state.previewDirty) {
+    refreshPreviewNow();
+  }
 }
 
 function setStatus(message, isError = false) {
@@ -450,6 +475,22 @@ function mergeStepsWithTools(steps, toolPreferences) {
     ...step,
     tool: step.tool || fallbackTools[index] || "",
   }));
+}
+
+function isJsonTabActive() {
+  const activePanel = document.querySelector('[data-panel].is-active');
+  return activePanel?.dataset.panel === "json";
+}
+
+function autosizeStepTextareas() {
+  document
+    .querySelectorAll('#steps textarea[data-name="instruction"]')
+    .forEach((textarea) => autosizeTextarea(textarea));
+}
+
+function autosizeTextarea(textarea) {
+  textarea.style.height = "0px";
+  textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
 function slugify(value) {
